@@ -61,7 +61,7 @@ android {
     defaultConfig {
         applicationId = "com.androidharness.app"
         minSdk = 26
-        targetSdk = 36
+        targetSdk = 35
         versionCode = 38
         versionName = "3.4"
         buildConfigField("String", "GITHUB_CLIENT_ID", "\"$githubClientId\"")
@@ -141,6 +141,7 @@ android {
     kotlin {
         compilerOptions {
             jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+            freeCompilerArgs.add("-Xmemory-limit=2g")
         }
     }
 
