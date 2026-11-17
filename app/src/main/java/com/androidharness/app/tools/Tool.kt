@@ -122,16 +122,22 @@ class ToolRegistry(private val tools: List<Tool>) {
                 PkgListTool(linuxEnv),
                 BgListTool(bgStore),
                 BgKillTool(bgStore),
-                GitStatusTool(shellRouter, linuxEnv),
-                GitDiffTool(shellRouter, linuxEnv),
-                GitLogTool(shellRouter, linuxEnv),
-                GitShowTool(shellRouter, linuxEnv),
-                GitCommitTool(shellRouter, linuxEnv),
-                GitBranchTool(shellRouter, linuxEnv),
-                GitBranchManageTool(shellRouter, linuxEnv),
-                GitCheckoutTool(shellRouter, linuxEnv),
-                GitPushTool(shellRouter, linuxEnv),
-                GitPullTool(shellRouter, linuxEnv),
+                GitInitTool(shellRouter, linuxEnv),
+            )
+            val gitOps = GitOps(shellRouter, linuxEnv)
+            baseTools += listOf(
+                GitStatusTool(gitOps),
+                GitDiffTool(gitOps),
+                GitLogTool(gitOps),
+                GitShowTool(gitOps),
+                GitCommitTool(gitOps, linuxEnv),
+                GitBranchTool(gitOps),
+                GitBranchManageTool(gitOps),
+                GitCheckoutTool(gitOps),
+                GitPushTool(gitOps),
+                GitPullTool(gitOps),
+            )
+            baseTools += listOf(
                 CreateDirTool(),
                 DeleteFileTool(),
                 MoveFileTool(),

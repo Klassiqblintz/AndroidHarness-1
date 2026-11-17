@@ -53,8 +53,7 @@ internal fun GitHubIntegrationSection(container: AppContainer) {
             Text(state.login?.takeIf { it.isNotEmpty() }?.let { uiContext.getString(R.string.ui_connected_as, (it).toString()) } ?: uiContext.getString(R.string.ui_connect_github),
                 style = MaterialTheme.typography.titleMedium)
             Text(if (state.login != null) {
-                if (state.oauth) uiContext.getString(R.string.ui_github_sign_in_credentials_stored_securely_on)
-                else uiContext.getString(R.string.ui_personal_access_token_credentials_stored_securely_on)
+                uiContext.getString(R.string.ui_github_sign_in_credentials_stored_securely_on)
             } else uiContext.getString(R.string.ui_sign_in_to_import_private_repositories_and), style = MaterialTheme.typography.bodySmall)
 
             if (state.code != null) {

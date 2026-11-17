@@ -613,3 +613,59 @@ private fun isIdentityUnknown(output: String): Boolean {
         lower.contains("empty ident name") ||
         lower.contains("please tell me who you are")
 }
+
+/**
+ * Initializes a Git repository in the workspace root. The agent calls this when
+ * a git operation reports "not a git repository" so subsequent git commands work.
+ *
+ * Auto-configures user.name / user.email so the first commit does not fail with
+ * "author identity unknown". Skips if .git already exists (idempotent).
+ */
+class GitInitTool(
+    private val router: ShellTierRouter,
+    private val linuxEnv: LinuxEnvironmentManager,
+) : Tool {
+    override val name = "git_init"
+    override val description =
+        "Initialize a Git repository in the workspace root. Call this when a git " +
+            "command reports 'not a git repository'. The first commit will also set a " +
+            "default user.name / user.email, so you do not need to configure them separately."
+    override val parametersSchema = Schema.obj(emptyMap())
+    override val isReadOnly = false
+
+    override suspend fun execute(args: JsonObject, ctx: ToolContext): ToolResult =
+        withContext(Dispatchers.IO) {
+            val initCmd = gitCmd("init")
+            var res = runGit(router, linuxEnv, ctx, initCmd)
+            // If .git already exists the command returns non-zero; treat as success.
+            val full = "${res.rawOutput}\n${res.rawStderr}"
+            if (res.exitCode != 0 && full.contains("already exists", ignoreCase = true)) {
+                // Configure identity so the first commit won't fail.
+                val configCmd = gitCmd(
+                    "config user.name 'Android Harness'",
+                    "config user.email 'harness@android.local'",
+                )
+                val configRes = runGit(router, linuxEnv, ctx, configCmd)
+                if (configRes.exitCode == 0) {
+                    return@withContext ToolResult(
+                        ok = true,
+                        output = "Repository was already initialized. Auto-configured identity: 'Android Harness <harness@android.local>'.",
+                    )
+                }
+                return@withContext ToolResult(ok = true, output = "Repository was already initialized.")
+            }
+            if (!res.ok) {
+                return@withContext buildGitResult(res)
+            }
+            // Auto-set identity for the first commit.
+            val configCmd = gitCmd(
+                "config user.name 'Android Harness'",
+                "config user.email 'harness@android.local'",
+            )
+            val configRes = runGit(router, linuxEnv, ctx, configCmd)
+            val note = if (configRes.ok)
+                "\n[note: auto-configured git identity 'Android Harness <harness@android.local>']"
+            else ""
+            ToolResult(ok = true, output = "Initialized empty Git repository in ${ctx.workspace.displayPath}.${note}")
+        }
+}

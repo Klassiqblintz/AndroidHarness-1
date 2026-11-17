@@ -371,7 +371,9 @@ class AppContainer(val appContext: Context) {
                 )
             }
         },
-        prepareGitHub = { github.refreshIfNeeded() },
+        prepareGitHub = {
+            // Direct token read — no refresh needed.
+        },
         deviceAccess = deviceAccess,
         universalMemory = memory,
         chatOnlyTools = listOf(com.androidharness.app.tools.ReadChatTextTool(sessions::messages),

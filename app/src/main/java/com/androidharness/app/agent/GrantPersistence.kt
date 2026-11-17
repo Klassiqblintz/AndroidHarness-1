@@ -39,7 +39,7 @@ internal class PrefsGrantPersistence(private val context: Context) : GrantPersis
  */
 internal object GrantPolicy {
     private val neverSaved = setOf(
-        "pkg_install", "android_sdk_install", "device_owner_shell", "github_create_pull_request", "git_push",
+        "pkg_install", "android_sdk_install", "device_owner_shell", "github_create_pull_request", "git_push", "git_init",
     )
 
     /** First words that can run anything, or that are destructive no matter what follows. */

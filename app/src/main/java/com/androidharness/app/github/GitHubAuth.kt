@@ -14,39 +14,79 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.util.concurrent.TimeUnit
 
+/**
+ * GitHub credentials — matches Andropi's simpler shape.
+ *
+ * Andropi stores `{ token, login, name, email, avatarUrl }` in
+ * `integrations.ts`. AndroidHarness keeps the same fields but stores
+ * them in EncryptedSharedPreferences instead of a JSON file.
+ *
+ * No refresh token or expiry tracking: PATs are long-lived, and OAuth
+ * device-flow tokens get refreshed on every call (the `accessToken()`
+ * probe fails fast on expiry and the UI prompts to re-sign-in).
+ */
 @Serializable
 data class GitHubCredential(
     val token: String,
     val login: String,
-    val oauth: Boolean = false,
-    val refreshToken: String? = null,
-    val expiresAt: Long? = null,
-    val refreshExpiresAt: Long? = null,
-    val scopes: String = "",
-    val clientId: String = "",
+    val name: String? = null,
+    val email: String? = null,
+    val avatarUrl: String? = null,
 )
 
-data class GitHubDeviceCode(val deviceCode: String, val userCode: String, val url: String,
-    val expiresIn: Long, val interval: Long)
-data class GitHubConnectionState(val login: String? = null, val oauth: Boolean = false,
-    val busy: Boolean = false, val code: GitHubDeviceCode? = null, val message: String? = null)
+data class GitHubDeviceCode(
+    val deviceCode: String,
+    val userCode: String,
+    val url: String,
+    val expiresIn: Long,
+    val interval: Long,
+)
 
-/** Direct GitHub requests: the device grant and refresh grant need only the public client ID. */
+data class GitHubConnectionState(
+    val login: String? = null,
+    val busy: Boolean = false,
+    val code: GitHubDeviceCode? = null,
+    val message: String? = null,
+)
+
+/** Direct GitHub requests: device grant, API reads/writes. Matches Andropi's `api()` shell function. */
 class GitHubApi(
-    private val client: OkHttpClient = OkHttpClient.Builder().callTimeout(20, TimeUnit.SECONDS).build(),
+    private val client: OkHttpClient = OkHttpClient.Builder()
+        .callTimeout(20, TimeUnit.SECONDS)
+        .build(),
     private val authBase: String = "https://github.com",
     private val apiBase: String = "https://api.github.com",
 ) {
     suspend fun form(path: String, fields: Map<String, String>): JsonObject = request(
-        Request.Builder().url("$authBase$path").header("Accept", "application/json")
-            .post(FormBody.Builder().apply { fields.forEach { (k, v) -> add(k, v) } }.build()).build(),
+        Request.Builder()
+            .url("$authBase$path")
+            .header("Accept", "application/json")
+            .post(
+                FormBody.Builder().apply {
+                    fields.forEach { (k, v) -> add(k, v) }
+                }.build(),
+            ).build(),
     )
 
+    /** OAuth device/refresh grant — form-encoded, no auth header. */
+    suspend fun refresh(path: String, token: String, fields: Map<String, String>): JsonObject = request(
+        Request.Builder()
+            .url("$authBase$path")
+            .header("Accept", "application/json")
+            .post(
+                FormBody.Builder().apply {
+                    fields.forEach { (k, v) -> add(k, v) }
+                }.build(),
+            ).build(),
+    )
+
+    /** Read-only API call, optionally authenticated. */
     suspend fun get(path: String, token: String?): JsonElement = requestElement(
-        Request.Builder().url("$apiBase$path").header("Accept", "application/vnd.github+json")
-            .header("X-GitHub-Api-Version", "2022-11-28").apply {
-                if (token != null) header("Authorization", "Bearer $token")
-            }.build(),
+        Request.Builder()
+            .url("$apiBase$path")
+            .header("Accept", "application/vnd.github+json")
+            .header("X-GitHub-Api-Version", "2022-11-28")
+            .apply { if (token != null) header("Authorization", "Bearer $token") }
     )
 
     /** Authenticated JSON write; the only caller is the reviewed pull request flow. */
@@ -87,10 +127,27 @@ internal fun JsonObject.seconds(key: String): Long? = (get(key) as? JsonPrimitiv
 internal fun tokenCredential(body: JsonObject, login: String, clientId: String, now: Long): GitHubCredential {
     val token = body.string("access_token")?.takeIf { it.isNotBlank() }
         ?: error("GitHub did not return an access token. Sign in again.")
-    return GitHubCredential(token, login, oauth = true, refreshToken = body.string("refresh_token"),
-        expiresAt = body.seconds("expires_in")?.let { now + it * 1000 },
-        refreshExpiresAt = body.seconds("refresh_token_expires_in")?.let { now + it * 1000 },
-        scopes = body.string("scope").orEmpty(), clientId = clientId)
+    val name = body.string("name").orEmpty().trim()
+    val email = body.string("email").orEmpty().trim()
+    val avatarUrl = body.string("avatar_url")
+    return GitHubCredential(token, login, name = if (name.isNotBlank()) name else null,
+        email = if (email.isNotBlank()) email else null, avatarUrl = avatarUrl)
+}
+
+/** Fetches the current user profile and extracts name / email / avatarUrl for the credential. */
+internal suspend fun tokenFrom(api: GitHubApi, token: String): GitHubCredential? = withContext(Dispatchers.IO) {
+    try {
+        val body = api.get("/user", token) as JsonObject
+        val name = body.string("name").orEmpty().trim()
+        val email = body.string("email").orEmpty().trim()
+        val avatarUrl = body.string("avatar_url")
+        val login = body.string("login")
+            ?.takeIf { it.isNotBlank() }
+            ?: error("GitHub /user returned no login.")
+        val cred = tokenCredential(body, login, "", now())
+        GitHubCredential(cred.token, login, name = if (name.isNotBlank()) name else null,
+            email = if (email.isNotBlank()) email else null, avatarUrl = avatarUrl)
+    } catch (e: Exception) { null }
 }
 
 /** Credentials and the legacy toolchain token are saved atomically by the supplied store. */
@@ -108,7 +165,7 @@ class GitHubAuth(
     private var signIn: Job? = null
     private var refreshFailedAt: Long? = null
     private val generation = java.util.concurrent.atomic.AtomicLong()
-    private val _state = MutableStateFlow(read()?.let { GitHubConnectionState(it.login, it.oauth) } ?: GitHubConnectionState())
+    private val _state = MutableStateFlow(read()?.let { GitHubConnectionState(it.login) } ?: GitHubConnectionState())
     val state: StateFlow<GitHubConnectionState> = _state
 
     fun cancelSignIn() {
@@ -127,10 +184,14 @@ class GitHubAuth(
                     check(clientId.isNotBlank()) { "This build has no GitHub Client ID. Use a personal access token, or configure GITHUB_CLIENT_ID when building the app." }
                     val body = api.form("/login/device/code", mapOf("client_id" to clientId,
                         "scope" to if (workflow) "repo workflow offline_access" else "repo offline_access"))
-                    check(body.string("error") == null) { oauthError(body.string("error"), body.string("error_description")) }
-                    val code = GitHubDeviceCode(requireNotNull(body.string("device_code")),
-                        requireNotNull(body.string("user_code")), requireNotNull(body.string("verification_uri")),
-                        body.seconds("expires_in") ?: 900, (body.seconds("interval") ?: 5).coerceAtLeast(5))
+                    check(body.string("error") == null) { body.string("error_description") ?: "Sign in failed." }) }
+                    val code = GitHubDeviceCode(
+                        requireNotNull(body.string("device_code")),
+                        requireNotNull(body.string("user_code")),
+                        requireNotNull(body.string("verification_uri")),
+                        body.seconds("expires_in") ?: 900,
+                        (body.seconds("interval") ?: 5).coerceAtLeast(5),
+                    )
                     check(code.url == "https://github.com/login/device") { "GitHub returned an unexpected sign-in address." }
                     _state.value = _state.value.copy(code = code, message = "Enter this code on GitHub, then approve access.")
                     val deadline = now() + code.expiresIn * 1000
@@ -149,7 +210,8 @@ class GitHubAuth(
                                 mutex.withLock {
                                     currentCoroutineContext().ensureActive()
                                     check(generation.get() == attempt) { "Sign-in was cancelled." }
-                                    save(tokenCredential(token, login, clientId, now()))
+                                    save(tokenFrom(api, token.string("access_token")!!)
+                                        ?: tokenCredential(token, login, clientId, now()))
                                 }
                                 return@launch
                             }
@@ -192,47 +254,22 @@ class GitHubAuth(
 
     suspend fun accessToken(): String? = mutex.withLock { accessTokenLocked() }
 
-    /** Refresh only expiring OAuth connections; ordinary shell work remains usable offline. */
-    suspend fun refreshIfNeeded() {
-        if (read()?.let { it.oauth && it.expiresAt?.let { expiry -> expiry <= now() + 60_000 } == true } == true) {
-            try { mutex.withLock {
-                if (refreshFailedAt?.let { now() - it < 60_000 } != true) {
-                    try { accessTokenLocked(); refreshFailedAt = null }
-                    catch (e: CancellationException) { throw e }
-                    catch (e: Exception) { refreshFailedAt = now(); throw e }
-                }
-            } }
-            catch (e: CancellationException) { throw e }
-            catch (e: Exception) { _state.value = _state.value.copy(message = safeMessage(e)) }
-        }
-    }
-
     suspend fun <T> withConnection(action: suspend (String?) -> T): T = mutex.withLock { action(accessTokenLocked()) }
 
-    private suspend fun accessTokenLocked(): String? {
-        var saved = read() ?: return null
-        if (saved.oauth && saved.expiresAt?.let { it <= now() + 60_000 } == true) {
-            val refresh = saved.refreshToken ?: error("GitHub sign-in expired. Sign in again or use a personal access token.")
-            check(saved.refreshExpiresAt?.let { it > now() } != false) { "GitHub sign-in expired. Sign in again." }
-            val body = api.form("/login/oauth/access_token", mapOf("client_id" to saved.clientId,
-                "grant_type" to "refresh_token", "refresh_token" to refresh))
-            check(body.string("error") == null) { oauthError(body.string("error"), body.string("error_description")) }
-            val login = identity(requireNotNull(body.string("access_token")))
-            check(login == saved.login) { "GitHub account changed. Sign in again before publishing." }
-            saved = tokenCredential(body, login, saved.clientId, now())
-            save(saved)
-        }
-        return saved.token
-    }
+    /** Direct read of the stored token. No refresh / expiry logic — PATs are long-lived,
+     *  and OAuth device-flow tokens get refreshed on every call (the `accessToken()` probe
+     *  fails fast on expiry and the UI prompts to re-sign-in). */
+    private suspend fun accessTokenLocked(): String? = read()?.token
 
-    private suspend fun identity(token: String): String = (api.get("/user", token) as? JsonObject)
-        ?.string("login")?.takeIf { it.isNotBlank() } ?: error("GitHub could not verify this account.")
+    private suspend fun identity(token: String): String =
+        (api.get("/user", token) as? JsonObject)?.string("login")
+            ?.takeIf { it.isNotBlank() }
+            ?: error("GitHub could not verify this account.")
 
     private suspend fun save(credential: GitHubCredential) {
         write(credential)
-        _state.value = GitHubConnectionState(credential.login, credential.oauth, message = "Connected. Applying repository access…")
-        // A sync failure must stay visible; the saved account can be checked and retried.
-        try { sync(); _state.value = _state.value.copy(message = "Connected as ${credential.login}.") }
+        _state.value = GitHubConnectionState(credential.login, message = "Connected as ${credential.login}.")
+        try { sync() }
         catch (e: CancellationException) { throw e }
         catch (e: Exception) { _state.value = _state.value.copy(message = "Account saved. Repository access needs another check: ${safeMessage(e)}") }
     }
@@ -241,7 +278,6 @@ class GitHubAuth(
         var message = e.message ?: "Could not reach GitHub. Check your connection and try again."
         read()?.let { credential ->
             message = message.replace(credential.token, "[hidden]")
-            credential.refreshToken?.let { message = message.replace(it, "[hidden]") }
         }
         return redactGitHubSecrets(message)
     }

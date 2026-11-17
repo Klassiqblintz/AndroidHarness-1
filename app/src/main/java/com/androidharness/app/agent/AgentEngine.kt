@@ -340,13 +340,36 @@ class AgentEngine(
         val agentContextEnabled = !localChat || replySettings.localModelAgentContext
         var suppliedMemories = emptyList<com.androidharness.app.core.SuppliedMemory>()
         var memoryQuery = recentMemoryQuery(history)
-        suspend fun runSystemPrompt(fullAccess: Boolean): String =
-            if (!agentContextEnabled) "" else if (conversation.isChat) chatSystemPrompt(sessionId, searchDepth, conversation, chatImageFrequency, chatInstructions, memoryQuery) { memories ->
-                suppliedMemories = memories.map { com.androidharness.app.core.SuppliedMemory(it.id, it.text) }
-            } else systemPrompt(workspace, mode, fullAccess = fullAccess, repoMapEnabled = repoMapEnabled, sessionId = sessionId, memoryQuery = memoryQuery, memoryAllowed = conversation.personalizationEnabled) +
-                (if (pinnedInstructions.isBlank()) "" else "\n\nPinned user instructions:\n$pinnedInstructions") + startNotes
-        var systemPrompt = runSystemPrompt(false)
+        /** Current section snapshot (replaced each time the prompt needs updating). */
+        var systemSections: SystemPromptSections? = null
+        /** Full system prompt text, recomputed from sections when any section changes. */
+        var systemPromptText: String = ""
+        var previousSections: SystemPromptSections? = null
         var promptSandboxOff = false
+
+        /** Build section snapshot for this turn's configuration. */
+        suspend fun buildSections(fullAccess: Boolean): SystemPromptSections =
+            if (!agentContextEnabled) SystemPromptSections()
+            else if (conversation.isChat) chatSections(
+                sessionId, searchDepth, conversation, chatImageFrequency,
+                chatInstructions, memoryQuery
+            )
+            else codeSections(
+                workspace, mode, fullAccess = fullAccess, repoMapEnabled = repoMapEnabled,
+                sessionId = sessionId, memoryQuery = memoryQuery,
+                memoryAllowed = conversation.personalizationEnabled,
+            ) + SystemPromptSections(extra = startNotes.takeIf { it.isNotBlank() })
+
+        /** Cold start: build and cache the full prompt. */
+        fun cacheFullPrompt(sections: SystemPromptSections): String {
+            systemPromptText = SystemPromptSections.build(sections)
+            return systemPromptText
+        }
+        // Cold start: build the full system prompt once at session start.
+        val initialSections = buildSections(false)
+        systemSections = initialSections
+        systemPromptText = SystemPromptSections.build(initialSections)
+        previousSections = initialSections
         val memoryOn = universalMemory?.isEnabled(sessionId) == true && conversation.personalizationEnabled
         // Chat gets a run-scoped web_search so the header's research depth
         // limits distinct sources per turn without touching other sessions.
@@ -451,7 +474,14 @@ class AgentEngine(
                 memoryQuery = nextMemoryQuery
                 replySettings = nextReplySettings
                 promptSandboxOff = sandboxOff
-                systemPrompt = runSystemPrompt(sandboxOff)
+                val newSections = buildSections(sandboxOff)
+                // If any section changed, re-derive the prompt from the section snapshot.
+                if (newSections != previousSections) {
+                    val update = SystemPromptSections.renderUpdate(previousSections!!, newSections)
+                    if (update.isNotBlank()) systemPromptText += update
+                    systemPromptText = SystemPromptSections.build(newSections)
+                    previousSections = newSections
+                }
             }
             // Open path resolution only exists on real-filesystem workspaces;
             // SAF has no shell root and stays inside its picked tree.
@@ -478,8 +508,8 @@ class AgentEngine(
             turnImages.update(working)
             val imageInventory = if (conversation.isChat && visionAvailable)
                 com.androidharness.app.tools.ChatImageInventory.promptSources(turnImages.sources(), imageStore::metadata) else ""
-            var requestSystemPrompt = if (!agentContextEnabled) "" else if (conversation.isChat) systemPrompt + environment + imageInventory else com.androidharness.app.caveman.CavemanPolicy.apply(
-                systemPrompt + environment + TodoPrompt.format(
+            var requestSystemPrompt = if (!agentContextEnabled) "" else if (conversation.isChat) systemPromptText + environment + imageInventory else com.androidharness.app.caveman.CavemanPolicy.apply(
+                systemPromptText + environment + TodoPrompt.format(
                     todoStore?.takeIf { !conversation.isChat && it.owner.value == sessionId }?.todos?.value.orEmpty(),
                     roundsWithoutTodoUpdate,
                 ).let { if (it.isBlank()) "" else "\n\n$it" },
@@ -1950,7 +1980,12 @@ class AgentEngine(
     ): List<ChatMessage>? {
         var keepCount = minOf(8, working.size)
         // Leave room below the trigger for a summary and continued work, even with few large turns.
-        val retainedBudget = (if (chat) maxContextTokens else compactThreshold) / 2
+        // Use a bounded budget (mirrors Andropi's default: reserve=16384, keepRecent=20000)
+        // so the compaction request stays within the provider's actual context window.
+        // For custom providers the catalog lookup may return null → use the smaller of
+        // contextLimit and compactThreshold instead of the full maxContextTokens.
+        val reserveTokens = minOf(contextLimit, compactThreshold)
+        val retainedBudget = minOf(reserveTokens / 2, maxContextTokens / 4)
         while (keepCount > 1 && (keepCount == working.size ||
                 estimateContext(working.takeLast(keepCount), "", emptyList()).total > retainedBudget)) keepCount--
         while (keepCount < working.size && working[working.size - keepCount].role == Role.TOOL) keepCount++
@@ -1961,8 +1996,11 @@ class AgentEngine(
             return null
         }
         emit(AgentEvent.Compacting("Summarizing earlier messages…"))
+        // Pass a bounded budget to HistoryCompactor so the summary request fits
+        // inside the provider's context window (Andropi uses 0.8 * reserveTokens).
+        val summaryBudget = minOf(Math.floorDiv(reserveTokens, 5) * 4, maxContextTokens)
         return try {
-            val summary = HistoryCompactor.summarize(provider, config, apiKey, older, maxContextTokens, sessionId,
+            val summary = HistoryCompactor.summarize(provider, config, apiKey, older, summaryBudget, sessionId,
                 progress = { emit(AgentEvent.Compacting(it)) },
                 event = { event, cfg -> when (event) {
                     is StreamEvent.ProviderChanged -> emit(AgentEvent.ProviderChanged(event.config, event.reason, event.persistSelection))
@@ -1977,8 +2015,11 @@ class AgentEngine(
         } catch (e: CancellationException) { throw e }
         catch (e: TaskPaused) { throw e }
         catch (e: Exception) {
-            emit(AgentEvent.Error(if (chat) "Compaction failed: ${e.message}. History was kept. Try sending again or choose another model."
-                else "Compaction failed: ${e.message}. History was kept. Retry /compact or choose another model."))
+            val msg = e.message ?: "Unknown error"
+            val isLength = msg.contains("length", ignoreCase = true) || msg.contains("incomplete", ignoreCase = true)
+            val hint = if (isLength) " (provider's context window may be smaller than expected)" else ""
+            emit(AgentEvent.Error(if (chat) "Compaction failed: ${msg}${hint}. History was kept. Try sending again or choose another model."
+                else "Compaction failed: ${msg}${hint}. History was kept. Retry /compact or choose another model."))
             null
         }
     }
@@ -2097,6 +2138,64 @@ class AgentEngine(
 
     private fun recentMemoryQuery(history: List<ChatMessage>): String = history.filter { it.role == Role.USER }
         .takeLast(3).joinToString("\n") { it.text.take(2_000) }
+
+    private suspend fun chatSections(
+        sessionId: String?,
+        searchDepth: com.androidharness.app.data.SearchDepth,
+        conversation: com.androidharness.app.data.ConversationConfig,
+        chatImageFrequency: com.androidharness.app.data.ImageFrequency,
+        chatInstructions: String,
+        memoryQuery: String = "",
+        onUsed: (List<com.androidharness.app.data.db.MemoryEntity>) -> Unit = {},
+    ): SystemPromptSections {
+        // Reuse the original chatSystemPrompt logic; wrap into sections.
+        val full = chatSystemPrompt(sessionId, searchDepth, conversation, chatImageFrequency, chatInstructions, memoryQuery, onUsed)
+        val preambleEnd = full.indexOf("# User instructions for this chat")
+        val preamble = if (preambleEnd > 0) full.substring(0, preambleEnd).trim() else full.trim()
+        val rest = if (preambleEnd > 0) full.substring(preambleEnd) else ""
+        return SystemPromptSections(
+            preamble = preamble.ifBlank { null },
+            userInstructions = rest.ifBlank { null },
+        )
+    }
+
+    private suspend fun codeSections(
+        workspace: com.androidharness.app.workspace.WorkspaceFs,
+        mode: com.androidharness.app.agent.AgentMode,
+        fullAccess: Boolean,
+        repoMapEnabled: Boolean,
+        sessionId: String?,
+        memoryQuery: String,
+        memoryAllowed: Boolean,
+    ): SystemPromptSections {
+        val projectContext = buildCodeContext(workspace, mode, fullAccess, repoMapEnabled, sessionId, memoryQuery, memoryAllowed)
+        return SystemPromptSections(
+            preamble = projectContext.preamble,
+            projectContext = projectContext.projectContext,
+        )
+    }
+
+    /** Helper that assembles the code-mode context pieces into individual sections. */
+    private suspend fun buildCodeContext(
+        workspace: com.androidharness.app.workspace.WorkspaceFs,
+        mode: com.androidharness.app.agent.AgentMode,
+        fullAccess: Boolean,
+        repoMapEnabled: Boolean,
+        sessionId: String?,
+        memoryQuery: String,
+        memoryAllowed: Boolean,
+    ): SystemPromptSections {
+        // Simplified: returns the full system prompt split into logical sections.
+        // The exact split mirrors what the original systemPrompt() function produces.
+        val full = systemPrompt(workspace, mode, fullAccess, repoMapEnabled, sessionId = sessionId, memoryQuery = memoryQuery, memoryAllowed = memoryAllowed)
+        val preambleEnd = full.indexOf("\n\n# Saved memory")
+        val preamble = if (preambleEnd >= 0) full.substring(0, preambleEnd).trim() else full.trim()
+        val rest = if (preambleEnd >= 0) full.substring(preambleEnd + 2) else ""
+        return SystemPromptSections(
+            preamble = preamble.ifBlank { null },
+            projectContext = rest.ifBlank { null },
+        )
+    }
 
     private suspend fun chatSystemPrompt(
         sessionId: String?,
