@@ -135,7 +135,7 @@ internal fun tokenCredential(body: JsonObject, login: String, clientId: String, 
 }
 
 /** Fetches the current user profile and extracts name / email / avatarUrl for the credential. */
-internal suspend fun tokenFrom(api: GitHubApi, token: String): GitHubCredential? = withContext(Dispatchers.IO) {
+internal suspend fun tokenFrom(api: GitHubApi, token: String, now: () -> Long): GitHubCredential? = withContext(Dispatchers.IO) {
     try {
         val body = api.get("/user", token) as JsonObject
         val name = body.string("name").orEmpty().trim()
@@ -210,7 +210,7 @@ class GitHubAuth(
                                 mutex.withLock {
                                     currentCoroutineContext().ensureActive()
                                     check(generation.get() == attempt) { "Sign-in was cancelled." }
-                                    save(tokenFrom(api, token.string("access_token")!!)
+                                    save(tokenFrom(api, token.string("access_token")!!, now)
                                         ?: tokenCredential(token, login, clientId, now()))
                                 }
                                 return@launch

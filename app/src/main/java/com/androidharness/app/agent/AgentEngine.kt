@@ -1973,8 +1973,8 @@ class AgentEngine(
     /** Summarize old history into one message when the context is nearly full. */
     private suspend fun compact(
         provider: LlmProvider, config: ProviderConfig, apiKey: String,
-        working: List<ChatMessage>, maxContextTokens: Int, sessionId: String,
-        chat: Boolean,
+        working: List<ChatMessage>, maxContextTokens: Int, contextLimit: Int,
+        sessionId: String, chat: Boolean,
         compactThreshold: Int,
         emit: suspend (AgentEvent) -> Unit,
     ): List<ChatMessage>? {
