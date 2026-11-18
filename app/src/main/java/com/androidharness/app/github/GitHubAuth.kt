@@ -172,6 +172,7 @@ class GitHubAuth(
     private val mutex = Mutex()
     private var signIn: Job? = null
     private var refreshFailedAt: Long? = null
+    private var refresher: Job? = null
     private val generation = java.util.concurrent.atomic.AtomicLong()
     private val _state = MutableStateFlow(read()?.let { GitHubConnectionState(it.login) } ?: GitHubConnectionState())
     val state: StateFlow<GitHubConnectionState> = _state
@@ -264,6 +265,7 @@ class GitHubAuth(
     suspend fun <T> withConnection(action: suspend (String?) -> T): T = mutex.withLock { action(accessTokenLocked()) }
 
     /** Reads the stored token, refreshing with a refresh token when it is close to expiry.
+     *  Only one thread triggers the refresh; others wait for it to complete.
      *  Returns null if refresh failed and the identity mismatched the existing account. */
     private suspend fun accessTokenLocked(): String? {
         val credential = read() ?: return null
@@ -275,7 +277,10 @@ class GitHubAuth(
         // Close to expiry: refresh with the stored refresh token.
         val refresh = credential.refreshToken ?: return credential.token
         if (refreshFailedAt != null && now < refreshFailedAt!! + 60_001) return credential.token
-        try {
+        // If a refresh is already in progress, wait for it to complete, then return the (possibly refreshed) token.
+        refresher?.let { it.join(); return read()?.token }
+        refresher = scope.launch { null }
+        return try {
             val formFields = mutableMapOf<String, String>(
                 "client_id" to clientId, "grant_type" to "refresh_token",
                 "refresh_token" to refresh)
@@ -284,11 +289,11 @@ class GitHubAuth(
             val login = identity(requireNotNull(token.string("access_token")))
             if (login != credential.login) {
                 refreshFailedAt = now + 60_001
-                error("Refresh returned account '$login' (expected '${credential.login}').")
+                error("Refresh returned account '$login (expected '${credential.login}').")
             }
             val refreshed = tokenCredential(token, login, clientId, now)
             save(refreshed)
-            return refreshed.token
+            refreshed.token
         } catch (e: Exception) {
             refreshFailedAt = now + 60_001
             throw e

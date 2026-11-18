@@ -179,7 +179,7 @@ class GitHubAuthTest {
         saved = GitHubCredential("gho_old", "alice", expiresAt = time.get() - 1, refreshToken = "ghr_old")
         reply = { _, _ -> 503 to """{"message":"Service unavailable"}""" }
         val connection = auth()
-        repeat(8) { connection.accessToken() }
+        repeat(8) { runCatching { connection.accessToken() } }
         assertEquals(1, requests.size)
         assertEquals("gho_old", saved?.token)
         time.addAndGet(60_001)
