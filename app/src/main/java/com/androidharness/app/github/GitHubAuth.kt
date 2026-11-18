@@ -87,7 +87,8 @@ class GitHubApi(
             .header("Accept", "application/vnd.github+json")
             .header("X-GitHub-Api-Version", "2022-11-28")
             .apply { if (token != null) header("Authorization", "Bearer $token") }
-    )
+            .get()
+            .build(),
 
     /** Authenticated JSON write; the only caller is the reviewed pull request flow. */
     suspend fun post(path: String, token: String, body: JsonObject): JsonElement = requestElement(
@@ -184,7 +185,7 @@ class GitHubAuth(
                     check(clientId.isNotBlank()) { "This build has no GitHub Client ID. Use a personal access token, or configure GITHUB_CLIENT_ID when building the app." }
                     val body = api.form("/login/device/code", mapOf("client_id" to clientId,
                         "scope" to if (workflow) "repo workflow offline_access" else "repo offline_access"))
-                    check(body.string("error") == null) { body.string("error_description") ?: "Sign in failed." }) }
+                    check(body.string("error") == null) { body.string("error_description") ?: "Sign in failed." }
                     val code = GitHubDeviceCode(
                         requireNotNull(body.string("device_code")),
                         requireNotNull(body.string("user_code")),
@@ -219,7 +220,7 @@ class GitHubAuth(
                         }
                     }
                     error("The sign-in code expired. Request a new code.")
-                } catch (e: CancellationException) { throw e
+                } catch (e: CancellationException) { throw e }
                 } catch (e: Exception) {
                     if (generation.get() == attempt) _state.value = _state.value.copy(busy = false, code = null, message = safeMessage(e))
                 } finally {

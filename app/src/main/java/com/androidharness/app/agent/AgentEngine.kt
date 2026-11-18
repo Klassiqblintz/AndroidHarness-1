@@ -527,7 +527,7 @@ class AgentEngine(
                 else AutoCompaction.threshold(autoCompactTokens(), contextLimit, requestOptions.maxOutputTokens)
             val needsCompaction = estimate.total >= compactThreshold
             if ((!localChat || agentContextEnabled) && needsCompaction && (conversation.isChat || working.size > 1)) {
-                val compacted = compact(provider, config, apiKey, working, contextLimit, sessionId, conversation.isChat, compactThreshold) {
+                val compacted = compact(provider, config, apiKey, working, maxContextTokens, contextLimit, sessionId, conversation.isChat, compactThreshold) {
                     if (it is AgentEvent.ProviderChanged) config = it.config
                     emit(it)
                 }

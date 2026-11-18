@@ -32,6 +32,26 @@ data class SystemPromptSections(
     val webSearchBackend: String? = null,   // <web_search_backend>  Web search config (Chat only)
     val extra: String? = null,              // <extra>  Anything else (plugin hooks, start notes, etc.)
 ) {
+    /** Merge another section's non-null fields over this one (non-null wins). */
+    operator fun plus(other: SystemPromptSections) = SystemPromptSections(
+        preamble = other.preamble ?: preamble,
+        rules = other.rules ?: rules,
+        richResponse = other.richResponse ?: richResponse,
+        planMode = other.planMode ?: planMode,
+        skills = other.skills ?: skills,
+        projectContext = other.projectContext ?: projectContext,
+        repositoryMap = other.repositoryMap ?: repositoryMap,
+        userInstructions = other.userInstructions ?: userInstructions,
+        memory = other.memory ?: memory,
+        environment = other.environment ?: environment,
+        imageInventory = other.imageInventory ?: imageInventory,
+        searchDepth = other.searchDepth ?: searchDepth,
+        imageFrequency = other.imageFrequency ?: imageFrequency,
+        chatAgent = other.chatAgent ?: chatAgent,
+        webSearchBackend = other.webSearchBackend ?: webSearchBackend,
+        extra = other.extra ?: extra,
+    )
+
     companion object {
         /** Build the full system prompt from all sections (session start). */
         fun build(sections: SystemPromptSections): String {
