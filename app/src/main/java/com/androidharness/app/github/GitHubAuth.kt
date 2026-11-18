@@ -88,13 +88,14 @@ class GitHubApi(
             .header("X-GitHub-Api-Version", "2022-11-28")
             .apply { if (token != null) header("Authorization", "Bearer $token") }
             .get()
-            .build(),
+            .build()
+    )
 
     /** Authenticated JSON write; the only caller is the reviewed pull request flow. */
     suspend fun post(path: String, token: String, body: JsonObject): JsonElement = requestElement(
         Request.Builder().url("$apiBase$path").header("Accept", "application/vnd.github+json")
             .header("X-GitHub-Api-Version", "2022-11-28").header("Authorization", "Bearer $token")
-            .post(body.toString().toRequestBody("application/json".toMediaType())).build(),
+            .post(body.toString().toRequestBody("application/json".toMediaType())).build()
     )
 
     private suspend fun request(request: Request): JsonObject = requestElement(request).jsonObject
