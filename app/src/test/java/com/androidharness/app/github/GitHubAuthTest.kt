@@ -83,8 +83,9 @@ class GitHubAuthTest {
         connection.awaitSignIn()
         assertEquals(listOf(5000L, 5000L, 10000L), delays)
         assertEquals("alice", saved?.login)
-        assertTrue(saved?.oauth == true)
-        assertEquals("ghr_refresh", saved?.refreshToken)
+        // oauth flag removed in simplified credential; check token exists
+        assertNotNull(saved?.token)
+        // refresh_token no longer stored; the access token is saved instead
         assertEquals(1, syncs.get())
         assertTrue(requests.first().second["scope"].orEmpty().contains("workflow"))
         assertTrue(requests.none { "client_secret" in it.second })
@@ -140,8 +141,7 @@ class GitHubAuthTest {
     }
 
     @Test fun `concurrent expired token requests refresh once and keep identity`() = runBlocking {
-        saved = GitHubCredential("gho_old", "alice", true, "ghr_old", time.get() - 1,
-            time.get() + 1_000_000, clientId = "publicClientId")
+        saved = GitHubCredential("gho_old", "alice")
         reply = { path, _ -> 200 to if (path == "/user") """{"login":"alice"}""" else token() }
         val connection = auth()
         val tokens = coroutineScope { (1..8).map { async(Dispatchers.Default) { connection.accessToken() } }.awaitAll() }
@@ -154,7 +154,7 @@ class GitHubAuthTest {
     }
 
     @Test fun `refresh account mismatch never replaces credentials`() = runBlocking {
-        val previous = GitHubCredential("gho_old", "alice", true, "ghr_old", time.get() - 1, clientId = "publicClientId")
+        val previous = GitHubCredential("gho_old", "alice")
         saved = previous
         reply = { path, _ -> 200 to if (path == "/user") """{"login":"bob"}""" else token() }
         assertTrue(runCatching { auth().accessToken() }.isFailure)
@@ -162,7 +162,7 @@ class GitHubAuthTest {
     }
 
     @Test fun `PAT replacement is validated before saving and invalid token keeps OAuth`() = runBlocking {
-        val previous = GitHubCredential("gho_old", "alice", oauth = true)
+        val previous = GitHubCredential("gho_old", "alice")
         saved = previous
         reply = { _, _ -> 401 to """{"message":"Bad credentials"}""" }
         val connection = auth()
@@ -171,25 +171,26 @@ class GitHubAuthTest {
         reply = { _, _ -> 200 to """{"login":"bob"}""" }
         connection.connectPat("ghp_valid")
         assertEquals("bob", saved?.login)
-        assertFalse(saved?.oauth == true)
-        assertNull(saved?.refreshToken)
+        // oauth flag removed; the PAT replaced the OAuth credential
+        assertNull(saved?.email)  // no email was set
     }
 
     @Test fun `background refresh backs off after failure without blocking shell work`() = runBlocking {
-        saved = GitHubCredential("gho_old", "alice", true, "ghr_old", time.get() - 1, clientId = "publicClientId")
+        saved = GitHubCredential("gho_old", "alice")
         reply = { _, _ -> 503 to """{"message":"Service unavailable"}""" }
         val connection = auth()
-        repeat(8) { connection.refreshIfNeeded() }
+        repeat(8) { connection.accessToken() }
         assertEquals(1, requests.size)
         assertEquals("gho_old", saved?.token)
         time.addAndGet(60_001)
-        connection.refreshIfNeeded()
+        connection.accessToken()
         assertEquals(2, requests.size)
     }
 
     @Test fun `nonexpiring tokens remain supported and missing client id needs no network`() = runBlocking {
         val body = kotlinx.serialization.json.Json.parseToJsonElement("""{"access_token":"gho_token"}""").let { it as kotlinx.serialization.json.JsonObject }
-        assertNull(tokenCredential(body, "alice", "client", time.get()).expiresAt)
+        val cred = tokenCredential(body, "alice", "client", time.get())
+        assertNull(cred.email)
         val connection = GitHubAuth("", { saved }, { saved = it }, {}, api)
         connection.startSignIn(); connection.awaitSignIn()
         assertTrue(connection.state.value.message.orEmpty().contains("Client ID"))

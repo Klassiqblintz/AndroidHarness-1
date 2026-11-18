@@ -136,15 +136,11 @@ class GitCommandTest {
         success(gitCommitCmd("initial"))
         tmp.root.resolve("untracked").mkdirs()
         val (code, output) = shell(gitLogCmd(20, "untracked", false))
-        val result = gitLogResult(buildGitResult(com.androidharness.app.data.env.ShellRunResult(
-            code, false, output, "", com.androidharness.app.data.env.ExecutionTier.TOYBOX, null,
-        )), "untracked")
+        val result = gitLogResult(buildGitResult(GitResult(code, output, "")), "untracked")
         assertTrue(result.ok)
         assertTrue(result.output, result.output.contains("No commit history found for 'untracked'"))
         val (outsideCode, outsideOutput) = shell(gitLogCmd(20, tmp.root.parentFile.path, false))
-        val outside = buildGitResult(com.androidharness.app.data.env.ShellRunResult(
-            outsideCode, false, "", outsideOutput, com.androidharness.app.data.env.ExecutionTier.TOYBOX, null,
-        ))
+        val outside = buildGitResult(GitResult(outsideCode, "", outsideOutput))
         assertFalse(outside.ok)
         assertFalse(outside.output, outside.output.contains("fatal:"))
     }
@@ -153,9 +149,7 @@ class GitCommandTest {
     fun `non repository errors are actionable`() {
         for (command in listOf(gitCmd("status"), gitLogCmd(20, null, false), gitCmd("diff"))) {
             val (code, output) = shell(command)
-            val result = buildGitResult(com.androidharness.app.data.env.ShellRunResult(
-                code, false, "", output, com.androidharness.app.data.env.ExecutionTier.TOYBOX, null,
-            ))
+            val result = buildGitResult(GitResult(code, "", output))
             assertFalse(result.ok)
             assertTrue(result.output, result.output.contains("git init"))
             assertFalse(result.output, result.output.contains("fatal:"))
@@ -358,13 +352,9 @@ class GitCommandTest {
 
     @Test
     fun `firstOutputLine reads the stdout section of a built result`() {
-        val ok = buildGitResult(com.androidharness.app.data.env.ShellRunResult(
-            0, false, "refs/heads/master\n", "", com.androidharness.app.data.env.ExecutionTier.TOYBOX, null,
-        ))
+        val ok = buildGitResult(GitResult(0, "refs/heads/master\n", ""))
         assertEquals("refs/heads/master", ok.firstOutputLine())
-        val empty = buildGitResult(com.androidharness.app.data.env.ShellRunResult(
-            0, false, "", "", com.androidharness.app.data.env.ExecutionTier.TOYBOX, null,
-        ))
+        val empty = buildGitResult(GitResult(0, "", ""))
         assertEquals(null, empty.firstOutputLine())
     }
 }
