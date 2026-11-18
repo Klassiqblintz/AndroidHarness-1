@@ -38,7 +38,9 @@ data class GitResult(
     val code: Int,
     val out: String,
     val err: String,
-)
+) {
+    val ok: Boolean get() = code == 0
+}
 
 /** Format a GitOps result into the same ToolResult shape the old git_* tools used. */
 internal fun buildGitResult(

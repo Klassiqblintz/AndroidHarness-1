@@ -138,41 +138,6 @@ internal fun isDubiousOwnership(output: String): Boolean =
     output.contains("dubious ownership", ignoreCase = true)
 
 /** Convert a GitOps result into the same ToolResult shape the git_* tools used. */
-internal fun buildGitResult(res: GitResult, note: String? = null): ToolResult {
-    val full = "${res.out}\n${res.err}"
-    if (res.code != 0 && (full.contains("not a git repository", ignoreCase = true) ||
-            full.contains("outside repository", ignoreCase = true))) {
-        return ToolResult(false, "The workspace or requested path is not in a Git repository. " +
-            "Select the repository workspace, or run git init in the intended folder first.")
-    }
-    if (res.code != 0 && full.contains("does not have any commits yet", ignoreCase = true)) {
-        return ToolResult(
-            ok = true,
-            output = buildString {
-                val header = note
-                if (header != null) append(header).append('\n')
-                append("No commits yet (repository is empty).")
-            }.trimEnd(),
-        )
-    }
-    return ToolResult(
-        ok = !res.err.contains("timed out", ignoreCase = true) && res.code == 0,
-        output = buildString {
-            val header = note
-            if (header != null) append(header).append('\n')
-            val text = res.out.trimEnd()
-            if (text.isNotEmpty()) {
-                append("--- stdout ---\n").append(text).append('\n')
-            }
-            val err = res.err.trimEnd()
-            if (err.isNotEmpty()) {
-                append("--- stderr ---\n").append(err)
-            }
-            if (text.isEmpty() && err.isEmpty()) append("(no output)")
-        }.trimEnd(),
-    )
-}
-
 private suspend fun runGitWithRetry(
     git: GitOps,
     ctx: ToolContext,
