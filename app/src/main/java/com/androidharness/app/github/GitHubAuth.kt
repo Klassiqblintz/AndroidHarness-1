@@ -172,7 +172,7 @@ class GitHubAuth(
     private val mutex = Mutex()
     private var signIn: Job? = null
     private var refreshFailedAt: Long? = null
-    private var refresher: Job? = null
+    private var refreshing = false
     private val generation = java.util.concurrent.atomic.AtomicLong()
     private val _state = MutableStateFlow(read()?.let { GitHubConnectionState(it.login) } ?: GitHubConnectionState())
     val state: StateFlow<GitHubConnectionState> = _state
@@ -278,8 +278,8 @@ class GitHubAuth(
         val refresh = credential.refreshToken ?: return credential.token
         if (refreshFailedAt != null && now < refreshFailedAt!! + 60_001) return credential.token
         // If a refresh is already in progress, wait for it to complete, then return the (possibly refreshed) token.
-        refresher?.let { it.join(); return read()?.token }
-        refresher = scope.launch { null }
+        if (refreshing) { return read()?.token }
+        refreshing = true
         return try {
             val formFields = mutableMapOf<String, String>(
                 "client_id" to clientId, "grant_type" to "refresh_token",
@@ -289,7 +289,7 @@ class GitHubAuth(
             val login = identity(requireNotNull(token.string("access_token")))
             if (login != credential.login) {
                 refreshFailedAt = now + 60_001
-                error("Refresh returned account '$login (expected '${credential.login}').")
+                error("Refresh returned account '$login' (expected '${credential.login}').")
             }
             val refreshed = tokenCredential(token, login, clientId, now)
             save(refreshed)
@@ -297,6 +297,8 @@ class GitHubAuth(
         } catch (e: Exception) {
             refreshFailedAt = now + 60_001
             throw e
+        } finally {
+            refreshing = false
         }
     }
 
