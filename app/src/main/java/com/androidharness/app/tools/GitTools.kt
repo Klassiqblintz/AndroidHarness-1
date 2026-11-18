@@ -144,12 +144,12 @@ private suspend fun runGitWithRetry(
     command: String,
     maxRetries: Int = 3,
 ): ToolResult {
-    var res = runGit(git, ctx, command)
+    var res = git.run(command.split(Regex("\\s+")).toList(), ctx.workspace)
     var attempt = 0
     while (!res.ok && !res.output.contains("uncertain", ignoreCase = true) && isIndexLocked(res.output) && attempt < maxRetries) {
         attempt++
         kotlinx.coroutines.delay(200L * (1L shl (attempt - 1)))
-        res = runGit(git, ctx, command)
+        res = git.run(command.split(Regex("\\s+")).toList(), ctx.workspace)
     }
     return res
 }
@@ -379,7 +379,7 @@ class GitCheckoutTool(
         mapOf(
             "branch" to Schema.string("Branch to switch to or restore from."),
             "create" to Schema.string("\"true\" to create before switching."),
-            "paths" to Schema.array(Schema.string("File path to restore.")),
+            "paths" to Schema.array(Schema.string("File path to restore."), "List of file paths to restore."),
         ),
     )
     override val isReadOnly = false
