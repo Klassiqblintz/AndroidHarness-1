@@ -181,10 +181,10 @@ class GitOps(
             ?.replace(Regex("""No commits yet on """""), "")
             ?: "HEAD"
         val upstream = headParts.getOrNull(1)?.trim()
-        val bracketMatch = headLine.matchEntire(Regex("""\[(.+)\]"""))
+        val bracketMatch = Regex("""\[(.+)\]""").matchEntire(headLine)
         val bracketText = bracketMatch?.groupValues?.getOrNull(1) ?: ""
-        val ahead = bracketText.matchEntire(Regex("""ahead (\d+)"""))?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 0
-        val behind = bracketText.matchEntire(Regex("""behind (\d+)"""))?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 0
+        val ahead = Regex("""ahead (\d+)""").matchEntire(bracketText)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 0
+        val behind = Regex("""behind (\d+)""").matchEntire(bracketText)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 0
 
         val files = lines.drop(1).mapNotNull { line ->
             if (line.length < 3) return@mapNotNull null
