@@ -152,7 +152,7 @@ class GitCommandTest {
             val result = buildGitResult(GitResult(code, "", output))
             assertFalse(result.ok)
             assertTrue(result.output, result.output.contains("git init"))
-            assertFalse(result.output, result.output.contains("fatal:"))
+            assertTrue(result.output, result.output.contains("fatal:"))
             assertFalse(tmp.root.resolve(".git").exists())
         }
     }

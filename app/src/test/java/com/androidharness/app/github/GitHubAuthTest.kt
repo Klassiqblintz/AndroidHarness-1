@@ -141,7 +141,7 @@ class GitHubAuthTest {
     }
 
     @Test fun `concurrent expired token requests refresh once and keep identity`() = runBlocking {
-        saved = GitHubCredential("gho_old", "alice")
+        saved = GitHubCredential("gho_old", "alice", expiresAt = time.get() - 1, refreshToken = "ghr_old")
         reply = { path, _ -> 200 to if (path == "/user") """{"login":"alice"}""" else token() }
         val connection = auth()
         val tokens = coroutineScope { (1..8).map { async(Dispatchers.Default) { connection.accessToken() } }.awaitAll() }
@@ -154,7 +154,7 @@ class GitHubAuthTest {
     }
 
     @Test fun `refresh account mismatch never replaces credentials`() = runBlocking {
-        val previous = GitHubCredential("gho_old", "alice")
+        val previous = GitHubCredential("gho_old", "alice", expiresAt = time.get() - 1, refreshToken = "ghr_old")
         saved = previous
         reply = { path, _ -> 200 to if (path == "/user") """{"login":"bob"}""" else token() }
         assertTrue(runCatching { auth().accessToken() }.isFailure)
@@ -176,7 +176,7 @@ class GitHubAuthTest {
     }
 
     @Test fun `background refresh backs off after failure without blocking shell work`() = runBlocking {
-        saved = GitHubCredential("gho_old", "alice")
+        saved = GitHubCredential("gho_old", "alice", expiresAt = time.get() - 1, refreshToken = "ghr_old")
         reply = { _, _ -> 503 to """{"message":"Service unavailable"}""" }
         val connection = auth()
         repeat(8) { connection.accessToken() }

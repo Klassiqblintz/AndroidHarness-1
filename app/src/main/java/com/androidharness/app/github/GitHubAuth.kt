@@ -32,6 +32,8 @@ data class GitHubCredential(
     val name: String? = null,
     val email: String? = null,
     val avatarUrl: String? = null,
+    val expiresAt: Long? = null,
+    val refreshToken: String? = null,
 )
 
 data class GitHubDeviceCode(
@@ -132,8 +134,11 @@ internal fun tokenCredential(body: JsonObject, login: String, clientId: String, 
     val name = body.string("name").orEmpty().trim()
     val email = body.string("email").orEmpty().trim()
     val avatarUrl = body.string("avatar_url")
+    val refreshToken = body.string("refresh_token")
+    val expiresAt = body.seconds("expires_in")?.let { now + it * 1000 }
     return GitHubCredential(token, login, name = if (name.isNotBlank()) name else null,
-        email = if (email.isNotBlank()) email else null, avatarUrl = avatarUrl)
+        email = if (email.isNotBlank()) email else null, avatarUrl = avatarUrl,
+        expiresAt = expiresAt, refreshToken = refreshToken)
 }
 
 /** Fetches the current user profile and extracts name / email / avatarUrl for the credential. */
@@ -148,7 +153,8 @@ internal suspend fun tokenFrom(api: GitHubApi, token: String, now: () -> Long): 
             ?: error("GitHub /user returned no login.")
         val cred = tokenCredential(body, login, "", now())
         GitHubCredential(cred.token, login, name = if (name.isNotBlank()) name else null,
-            email = if (email.isNotBlank()) email else null, avatarUrl = avatarUrl)
+            email = if (email.isNotBlank()) email else null, avatarUrl = avatarUrl,
+            expiresAt = cred.expiresAt, refreshToken = cred.refreshToken)
     } catch (e: Exception) { null }
 }
 
@@ -257,10 +263,37 @@ class GitHubAuth(
 
     suspend fun <T> withConnection(action: suspend (String?) -> T): T = mutex.withLock { action(accessTokenLocked()) }
 
-    /** Direct read of the stored token. No refresh / expiry logic — PATs are long-lived,
-     *  and OAuth device-flow tokens get refreshed on every call (the `accessToken()` probe
-     *  fails fast on expiry and the UI prompts to re-sign-in). */
-    private suspend fun accessTokenLocked(): String? = read()?.token
+    /** Reads the stored token, refreshing with a refresh token when it is close to expiry.
+     *  Returns null if refresh failed and the identity mismatched the existing account. */
+    private suspend fun accessTokenLocked(): String? {
+        val credential = read() ?: return null
+        // No expiry — PATs are long-lived, just return the stored token.
+        if (credential.expiresAt == null) return credential.token
+        // If not close to expiry, return the stored token directly.
+        val now = now()
+        if (now < credential.expiresAt - 60_000) return credential.token
+        // Close to expiry: refresh with the stored refresh token.
+        val refresh = credential.refreshToken ?: return credential.token
+        if (refreshFailedAt != null && now < refreshFailedAt!! + 60_001) return credential.token
+        try {
+            val formFields = mutableMapOf<String, String>(
+                "client_id" to clientId, "grant_type" to "refresh_token",
+                "refresh_token" to refresh)
+            if (clientId.isNotBlank()) formFields["client_secret"] = ""
+            val token = api.form("/login/oauth/access_token", formFields)
+            val login = identity(requireNotNull(token.string("access_token")))
+            if (login != credential.login) {
+                refreshFailedAt = now + 60_001
+                error("Refresh returned account '$login' (expected '${credential.login}').")
+            }
+            val refreshed = tokenCredential(token, login, clientId, now)
+            save(refreshed)
+            return refreshed.token
+        } catch (e: Exception) {
+            refreshFailedAt = now + 60_001
+            throw e
+        }
+    }
 
     private suspend fun identity(token: String): String =
         (api.get("/user", token) as? JsonObject)?.string("login")
