@@ -221,8 +221,7 @@ class GitHubAuth(
                         }
                     }
                     error("The sign-in code expired. Request a new code.")
-                } catch (e: CancellationException) { throw e }
-                } catch (e: Exception) {
+                } catch (e: CancellationException) { throw e } catch (e: Exception) {
                     if (generation.get() == attempt) _state.value = _state.value.copy(busy = false, code = null, message = safeMessage(e))
                 } finally {
                     if (generation.get() == attempt) _state.value = _state.value.copy(busy = false, code = null)
