@@ -35,7 +35,9 @@ jobs:
       # The runner image ships an Android SDK but not the pinned NDK.
       # AGP refuses to configure without it, so install explicitly.
       - name: Install pinned NDK
-        run: "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager --install 'ndk;27.2.12479018'"
+        run: |
+          rm -rf "${ANDROID_HOME}/ndk/27.2.12479018"
+          "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" --install 'ndk;27.2.12479018'
 
       - name: Install Vulkan shader compiler
         run: sudo apt-get update && sudo apt-get install -y glslc
@@ -74,7 +76,9 @@ jobs:
         uses: gradle/actions/setup-gradle@v3
 
       - name: Install pinned NDK
-        run: "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager --install 'ndk;27.2.12479018'"
+        run: |
+          rm -rf "${ANDROID_HOME}/ndk/27.2.12479018"
+          "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" --install 'ndk;27.2.12479018'
 
       - name: Install Vulkan shader compiler
         run: sudo apt-get update && sudo apt-get install -y glslc
