@@ -117,6 +117,11 @@ jobs:
       - name: Set up Gradle (caching)
         uses: gradle/actions/setup-gradle@v3
 
+      - name: Install pinned NDK
+        run: |
+          rm -rf "${ANDROID_HOME}/ndk/27.2.12479018"
+          "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" --install 'ndk;27.2.12479018'
+
       - name: Write local.properties
         run: |
           echo "sdk.dir=$ANDROID_HOME" > local.properties
