@@ -137,7 +137,7 @@ internal fun gitPullCmd(remote: String?, mode: String?): String {
 internal fun isDubiousOwnership(output: String): Boolean =
     output.contains("dubious ownership", ignoreCase = true)
 
-/** Convert a GitOps result into the same ToolResult shape the git_* tools used. */
+/** Wrap GitOps.run into a retry loop, returning ToolResult for compatibility with callers. */
 private suspend fun runGitWithRetry(
     git: GitOps,
     ctx: ToolContext,
@@ -146,12 +146,23 @@ private suspend fun runGitWithRetry(
 ): ToolResult {
     var res = git.run(command.split(Regex("\\s+")).toList(), ctx.workspace)
     var attempt = 0
-    while (!res.ok && !res.output.contains("uncertain", ignoreCase = true) && isIndexLocked(res.output) && attempt < maxRetries) {
+    while (res.code != 0 && !res.out.contains("uncertain", ignoreCase = true) && isIndexLocked(res.out) && attempt < maxRetries) {
         attempt++
         kotlinx.coroutines.delay(200L * (1L shl (attempt - 1)))
         res = git.run(command.split(Regex("\\s+")).toList(), ctx.workspace)
     }
-    return res
+    return ToolResult(
+        ok = res.code == 0 && !res.err.contains("timed out", ignoreCase = true),
+        output = buildString {
+            if (res.out.isNotEmpty()) {
+                append("--- stdout ---\n").append(res.out.trimEnd()).append('\n')
+            }
+            if (res.err.isNotEmpty()) {
+                append("--- stderr ---\n").append(res.err.trimEnd())
+            }
+            if (res.out.isEmpty() && res.err.isEmpty()) append("(no output)")
+        }.trimEnd(),
+    )
 }
 
 // --- Tool classes each take GitOps instead of (ShellTierRouter, LinuxEnvironmentManager) ---
