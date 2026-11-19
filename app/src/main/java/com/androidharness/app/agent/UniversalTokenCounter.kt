@@ -18079,12 +18079,13 @@ object UniversalTokenCounter {
             val merged = mutableListOf<IntArray>()
             var i = 0
             while (i < tokens.size - 1) {
-                val a = tokens[i], b = tokens[i + 1]
+                val a = tokens[i]
+                val b = tokens[i + 1]
                 var matched = false
                 // Check each merge pair (MERGES[2k] + MERGES[2k+1])
                 for (k in 0..(MERGES.size / 2 - 1)) {
-                    val left = MERGES[2 * k]
-                    val right = MERGES[2 * k + 1]
+                    val left = MERGES[2 * k].toIntArray()
+                    val right = MERGES[2 * k + 1].toIntArray()
                     if (a.contentEquals(left) && b.contentEquals(right)) {
                         merged.add(a + b)
                         i += 2
